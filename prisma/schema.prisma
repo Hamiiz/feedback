@@ -1,0 +1,118 @@
+// Prisma schema for the Telegram Feedback Bot
+// Run: npx prisma migrate dev --name init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ───────────────────────────────────────────────────────────────────
+
+enum FeedbackStatus {
+  PENDING // Just submitted, not yet reviewed
+  REVIEWED // Admin has acknowledged it
+  ARCHIVED // Closed / resolved
+}
+
+enum MediaType {
+  PHOTO
+  VIDEO
+  VOICE
+  DOCUMENT
+  STICKER
+  AUDIO
+  VIDEO_NOTE
+}
+
+// ─── Models ──────────────────────────────────────────────────────────────────
+
+model User {
+  id         Int     @id @default(autoincrement())
+  telegramId BigInt  @unique
+  username   String?
+  firstName  String
+  lastName   String?
+
+  // Anonymous mode: when true, admin sees alias instead of real profile
+  isAnonymous Boolean @default(false)
+
+  // Moderation
+  isBanned  Boolean   @default(false)
+  banReason String?
+  bannedAt  DateTime?
+
+  // Stats
+  feedbackCount  Int       @default(0)
+  lastFeedbackAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  feedbacks Feedback[]
+
+  @@map("users")
+}
+
+// Admin-managed feedback categories.
+// When the table is empty, the category picker is hidden and all
+// submissions are saved as "General" automatically.
+model Category {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  feedbacks Feedback[]
+
+  @@map("categories")
+}
+
+model Feedback {
+  id Int @id @default(autoincrement())
+
+  // Relationship to sender
+  userId Int
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // A random alias shown to admins when the user is in anonymous mode.
+  // Format: ANON-XXXXX (e.g., ANON-A7F3K)
+  sessionAlias String
+
+  // Content
+  content     String? // Text body (null if media-only)
+  mediaType   MediaType? // Type of attached media, if any
+  mediaFileId String? // Telegram file_id for media
+
+  // Category — optional FK to Category table.
+  // Null means "General" (submitted when no categories are configured).
+  categoryId Int?
+  category   Category? @relation(fields: [categoryId], references: [id])
+
+  isAnonymous Boolean // Snapshot of user.isAnonymous at submission time
+
+  // Admin tracking: the message_id of the forwarded notification in admin chat.
+  // Used to map admin replies back to the original sender.
+  adminMessageId BigInt? @unique
+
+  // Workflow
+  status    FeedbackStatus @default(PENDING)
+  adminNote String? // Optional internal admin note
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("feedbacks")
+}
+
+// Telegraf session store — keyed by "chatId:userId" string
+model BotSession {
+  id        String   @id // Key format: "{chatId}:{userId}"
+  data      Json
+  updatedAt DateTime @updatedAt
+
+  @@map("bot_sessions")
+}
