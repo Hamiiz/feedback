@@ -33,7 +33,6 @@ export async function upsertUser(telegramUser: TelegramUser): Promise<User> {
 
 /**
  * Toggle the anonymous mode flag for a user.
- * Returns the updated user record.
  */
 export async function toggleAnonymous(telegramId: number): Promise<User> {
   const user = await prisma.user.findUniqueOrThrow({
@@ -48,7 +47,6 @@ export async function toggleAnonymous(telegramId: number): Promise<User> {
 
 /**
  * Ban a user by their Telegram ID.
- * Subsequent updates from this user will be silently dropped.
  */
 export async function banUser(
   telegramId: number,
@@ -61,11 +59,7 @@ export async function banUser(
 
   return prisma.user.update({
     where: { id: user.id },
-    data: {
-      isBanned: true,
-      banReason: reason ?? null,
-      bannedAt: new Date(),
-    },
+    data: { isBanned: true, banReason: reason ?? null, bannedAt: new Date() },
   });
 }
 

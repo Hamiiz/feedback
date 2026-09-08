@@ -1,92 +1,19 @@
 import { Markup, Telegraf } from "telegraf";
 import { Message } from "telegraf/types";
-import { MediaType } from "@prisma/client";
 import { BotContext } from "../../types/context";
 import { upsertUser } from "../../services/userService";
-import { saveFeedback } from "../../services/feedbackService";
-import { sendAdminNotification } from "../../services/notificationService";
-import { getActiveCategories } from "../../services/categoryService";
-import { prisma } from "../../config/prisma";
+import { sendAdminNotification, MediaType } from "../../services/notificationService";
+import { getActiveCategories, getCategoryById } from "../../services/categoryService";
+import { nanoid } from "../../utils/nanoid";
 
 /**
- * Initiate the feedback flow.
- *
- * - If no categories are configured: skip the picker, go straight to awaiting the message.
- * - If categories exist: show an inline keyboard for the user to pick one.
- */
-export async function startFeedbackFlow(ctx: BotContext): Promise<void> {
-  ctx.session.awaitingFeedback = false;
-  ctx.session.selectedCategoryId = null;
-
-  const categories = await getActiveCategories();
-
-  if (categories.length === 0) {
-    // No categories configured — go straight to submission
-    ctx.session.awaitingFeedback = true;
-    await ctx.reply(
-      [
-        "<b>Send your feedback</b>",
-        "",
-        "You can include text, a photo, video, voice message, or a file.",
-        "",
-        "<i>Type /cancel to abort.</i>",
-      ].join("\n"),
-      { parse_mode: "HTML" }
-    );
-    return;
-  }
-
-  // Categories are configured — show the picker
-  const buttons = categories.map((cat) =>
-    Markup.button.callback(cat.name, `category:${cat.id}`)
-  );
-
-  // Arrange in rows of 2
-  const rows: ReturnType<typeof Markup.button.callback>[][] = [];
-  for (let i = 0; i < buttons.length; i += 2) {
-    rows.push(buttons.slice(i, i + 2));
-  }
-  rows.push([Markup.button.callback("Cancel", "feedback:cancel")]);
-
-  await ctx.reply("<b>Choose a category for your feedback:</b>", {
-    parse_mode: "HTML",
-    ...Markup.inlineKeyboard(rows),
-  });
-}
-
-/**
- * Handle category selection from the inline keyboard.
- * Saves the chosen category ID in session and prompts for content.
- */
-export async function handleCategorySelection(
-  ctx: BotContext,
-  categoryId: number,
-  categoryName: string
-): Promise<void> {
-  ctx.session.selectedCategoryId = categoryId;
-  ctx.session.awaitingFeedback = true;
-
-  await ctx.editMessageText(
-    [
-      `Category: <b>${categoryName}</b>`,
-      ``,
-      `Now send your feedback — you can include text, a photo, video, voice message, or a file.`,
-      ``,
-      `<i>Type /cancel to abort.</i>`,
-    ].join("\n"),
-    { parse_mode: "HTML" }
-  );
-}
-
-/**
- * Helper: extract media info from a Telegram message.
+ * Extract media info from a Telegram message.
  */
 function extractMedia(
   message: Message
 ): { mediaType: MediaType; mediaFileId: string } | null {
   if ("photo" in message && message.photo?.length) {
-    const largest = message.photo[message.photo.length - 1];
-    return { mediaType: "PHOTO", mediaFileId: largest.file_id };
+    return { mediaType: "PHOTO", mediaFileId: message.photo[message.photo.length - 1].file_id };
   }
   if ("video" in message && message.video) {
     return { mediaType: "VIDEO", mediaFileId: message.video.file_id };
@@ -110,8 +37,63 @@ function extractMedia(
 }
 
 /**
- * Handle incoming message when the bot is awaiting feedback content.
- * Saves to DB, notifies admin, and confirms to the user.
+ * Initiate the feedback flow.
+ *
+ * - No categories configured → skip the picker, prompt directly.
+ * - Categories exist → show a dynamic inline keyboard.
+ */
+export async function startFeedbackFlow(ctx: BotContext): Promise<void> {
+  ctx.session.awaitingFeedback = false;
+  ctx.session.selectedCategoryId = null;
+
+  const categories = await getActiveCategories();
+
+  if (categories.length === 0) {
+    ctx.session.awaitingFeedback = true;
+    await ctx.reply(
+      ["<b>Send your feedback</b>", "", "You can include text, a photo, video, voice message, or a file.", "", "<i>Type /cancel to abort.</i>"].join("\n"),
+      { parse_mode: "HTML" }
+    );
+    return;
+  }
+
+  const buttons = categories.map((cat) =>
+    Markup.button.callback(cat.name, `category:${cat.id}`)
+  );
+
+  const rows: ReturnType<typeof Markup.button.callback>[][] = [];
+  for (let i = 0; i < buttons.length; i += 2) {
+    rows.push(buttons.slice(i, i + 2));
+  }
+  rows.push([Markup.button.callback("Cancel", "feedback:cancel")]);
+
+  await ctx.reply("<b>Choose a category for your feedback:</b>", {
+    parse_mode: "HTML",
+    ...Markup.inlineKeyboard(rows),
+  });
+}
+
+/**
+ * Handle category selection — saves to session and prompts for content.
+ */
+export async function handleCategorySelection(
+  ctx: BotContext,
+  categoryId: number,
+  categoryName: string
+): Promise<void> {
+  ctx.session.selectedCategoryId = categoryId;
+  ctx.session.awaitingFeedback = true;
+
+  await ctx.editMessageText(
+    [`Category: <b>${categoryName}</b>`, ``, `Now send your feedback — text, photo, video, voice message, or a file.`, ``, `<i>Type /cancel to abort.</i>`].join("\n"),
+    { parse_mode: "HTML" }
+  );
+}
+
+/**
+ * Handle the actual feedback message.
+ * No feedback content is stored in the database — the only DB write is
+ * the reply-routing map created inside sendAdminNotification().
  */
 export async function handleFeedbackMessage(
   ctx: BotContext,
@@ -122,7 +104,6 @@ export async function handleFeedbackMessage(
   const user = await upsertUser(ctx.from);
   const message = ctx.message;
 
-  // Extract text and media
   const content =
     "text" in message
       ? message.text
@@ -133,29 +114,22 @@ export async function handleFeedbackMessage(
   const media = extractMedia(message);
 
   if (!content && !media) {
-    await ctx.reply(
-      "I couldn't process that message type. Please send text, a photo, video, voice message, or a file."
-    );
+    await ctx.reply("I couldn't process that message type. Please send text, a photo, video, voice message, or a file.");
     return;
   }
 
-  // Save to database — include category if one was selected
-  const feedback = await saveFeedback({
-    userId: user.id,
-    content,
-    mediaType: media?.mediaType,
-    mediaFileId: media?.mediaFileId,
-    categoryId: ctx.session.selectedCategoryId ?? undefined,
-    isAnonymous: user.isAnonymous,
-  });
+  // Resolve category name if one was selected
+  let categoryName: string | undefined;
+  if (ctx.session.selectedCategoryId) {
+    const cat = await getCategoryById(ctx.session.selectedCategoryId);
+    categoryName = cat?.name;
+  }
 
-  // Load the full feedback record with its category relation for the notification
-  const feedbackWithCategory = await prisma.feedback.findUniqueOrThrow({
-    where: { id: feedback.id },
-    include: { category: { select: { name: true } } },
-  });
+  // Generate a one-time alias for anonymous display — not persisted
+  const sessionAlias = `ANON-${nanoid(5).toUpperCase()}`;
 
-  // Reset session state
+  // Reset session before the async notification so a restart mid-send
+  // doesn't leave the user stuck in awaiting state
   ctx.session.awaitingFeedback = false;
   ctx.session.selectedCategoryId = null;
 
@@ -164,38 +138,35 @@ export async function handleFeedbackMessage(
     : "\nYour name was included with the submission.";
 
   await ctx.reply(
-    [
-      `<b>Feedback received. Thank you.</b>`,
-      ``,
-      `Submission ID: <code>#${feedback.id}</code>`,
-      anonNote,
-      ``,
-      `<i>If you'd like to send more feedback, just tap the button below.</i>`,
-    ].join("\n"),
+    ["<b>Feedback received. Thank you.</b>", "", anonNote, "", "<i>If you'd like to send more feedback, tap the button below.</i>"].join("\n"),
     {
       parse_mode: "HTML",
-      ...Markup.inlineKeyboard([
-        [Markup.button.callback("Send More Feedback", "feedback:start")],
-      ]),
+      ...Markup.inlineKeyboard([[Markup.button.callback("Send More Feedback", "feedback:start")]]),
     }
   );
 
-  // Notify admins (non-blocking)
-  sendAdminNotification(bot, feedbackWithCategory, user).catch((err) => {
+  // Forward to admin and write the reply-routing map (non-blocking)
+  sendAdminNotification(bot, {
+    user,
+    content,
+    mediaType: media?.mediaType,
+    mediaFileId: media?.mediaFileId,
+    categoryName,
+    isAnonymous: user.isAnonymous,
+    sessionAlias,
+  }).catch((err) => {
     console.error("[feedbackHandler] Admin notification failed:", err);
   });
 }
 
 /**
- * Cancel an in-progress feedback submission.
+ * Cancel an in-progress submission.
  */
 export async function cancelFeedback(ctx: BotContext): Promise<void> {
   ctx.session.awaitingFeedback = false;
   ctx.session.selectedCategoryId = null;
 
   await ctx.reply("Feedback submission cancelled.", {
-    ...Markup.inlineKeyboard([
-      [Markup.button.callback("Start New Feedback", "feedback:start")],
-    ]),
+    ...Markup.inlineKeyboard([[Markup.button.callback("Start New Feedback", "feedback:start")]]),
   });
 }
