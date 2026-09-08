@@ -32,7 +32,8 @@ function formatMessage(payload: FeedbackPayload): string {
   const date = new Date().toLocaleString("en-GB", {
     day: "2-digit", month: "short", year: "numeric",
     hour: "2-digit", minute: "2-digit",
-  });
+    timeZone: "Africa/Nairobi", // East Africa Time (EAT)
+  }) + " EAT";
 
   let header: string;
   if (payload.isAnonymous) {

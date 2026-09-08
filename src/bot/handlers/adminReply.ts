@@ -30,8 +30,7 @@ export async function handleAdminReply(
 
   const senderTelegramId = Number(sender.userTelegramId);
   const senderName = sender.senderName;
-  const adminName = ctx.from?.first_name ?? "Admin";
-  const prefix = `<b>Reply from the team (${adminName}):</b>\n\n`;
+  const prefix = `<b>Reply from Admin:</b>\n\n`;
 
   try {
     if ("text" in message && message.text) {
