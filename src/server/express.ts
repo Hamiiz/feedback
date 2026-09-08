@@ -39,8 +39,14 @@ export function createExpressApp(bot: Telegraf<BotContext>): express.Application
       next();
     },
     (req: Request, res: Response) => {
-      // Hand the update off to Telegraf
-      bot.handleUpdate(req.body, res);
+      // Immediately acknowledge the request to prevent Telegram from retrying
+      // and causing duplicate messages (especially on slower hosts like Render)
+      res.sendStatus(200);
+
+      // Hand the update off to Telegraf in the background
+      bot.handleUpdate(req.body).catch((err) => {
+        console.error("[webhook] Error handling update:", err);
+      });
     }
   );
 
