@@ -65,7 +65,8 @@ export function createBot(): Telegraf<BotContext> {
   // whether the user is in the middle of submitting feedback.
   bot.on("message", async (ctx) => {
     // Admin reply routing: relay replies in the admin chat back to users
-    await handleAdminReply(ctx, bot);
+    const isReply = await handleAdminReply(ctx, bot);
+    if (isReply) return;
 
     // Only process feedback if the user is in the awaiting-feedback state
     if (ctx.session.awaitingFeedback) {

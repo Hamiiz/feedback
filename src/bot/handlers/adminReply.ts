@@ -13,20 +13,20 @@ import { getSenderByAdminMessageId } from "../../services/replyMapService";
 export async function handleAdminReply(
   ctx: BotContext,
   bot: Telegraf<BotContext>
-): Promise<void> {
+): Promise<boolean> {
   const chatId = ctx.chat?.id?.toString();
-  if (chatId !== env.ADMIN_CHAT_ID) return;
+  if (chatId !== env.ADMIN_CHAT_ID) return false;
 
   const message = ctx.message;
-  if (!message) return;
+  if (!message) return false;
 
   const repliedTo =
     "reply_to_message" in message ? message.reply_to_message : undefined;
-  if (!repliedTo) return;
+  if (!repliedTo) return false;
 
   // Look up the original sender from the reply-routing map
   const sender = await getSenderByAdminMessageId(repliedTo.message_id);
-  if (!sender) return; // Not a feedback notification reply
+  if (!sender) return false; // Not a feedback notification reply
 
   const senderTelegramId = Number(sender.userTelegramId);
   const senderName = sender.senderName;
@@ -57,12 +57,13 @@ export async function handleAdminReply(
         parse_mode: "HTML",
       });
     } else {
-      return; // Unsupported reply type
+      return false; // Unsupported reply type
     }
 
     await ctx.reply(`Reply delivered to ${senderName}.`, {
       reply_parameters: { message_id: message.message_id },
     });
+    return true;
   } catch (err: unknown) {
     const apiErr = err as { response?: { error_code?: number } };
     if (apiErr?.response?.error_code === 403) {
@@ -75,5 +76,6 @@ export async function handleAdminReply(
         reply_parameters: { message_id: message.message_id },
       });
     }
+    return true; // We handled it (even if it failed), don't pass to other handlers
   }
 }
