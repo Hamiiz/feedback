@@ -60,7 +60,7 @@ export async function handleAdminReply(
       return false; // Unsupported reply type
     }
 
-    await ctx.reply(`Reply delivered .`, {
+    await ctx.reply(`Reply delivered to ${senderName}.`, {
       reply_parameters: { message_id: message.message_id },
     });
     return true;

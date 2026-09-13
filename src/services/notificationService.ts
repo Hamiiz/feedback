@@ -105,11 +105,13 @@ export async function sendAdminNotification(
       sentMessage = await bot.telegram.sendMessage(adminChatId, caption, { parse_mode: "HTML" });
     }
 
-    // Store the reply-routing map — the only DB write per submission
+    // Store the reply-routing map — the only DB write per submission.
+    // Use the alias for anonymous senders so the admin confirmation message
+    // never leaks the real name (e.g. "Reply delivered to ANON-X7K2M").
     await storeReplyMap(
       sentMessage.message_id,
       user.telegramId,
-      user.firstName
+      payload.isAnonymous ? payload.sessionAlias : user.firstName
     );
   } catch (err) {
     console.error("[notificationService] Failed to send admin notification:", err);
